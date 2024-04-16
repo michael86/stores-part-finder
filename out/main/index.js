@@ -94,26 +94,54 @@ const fetchPartCount = async () => {
   }
   for (const order of workOrders) {
     const directory = path.join(settings.directory, order);
-    const data = await xlsx.readFile(directory);
-    await findHeaderColumn(data, "part number");
-    await fetchValuesFromColumn();
+    const workBook = await xlsx.readFile(directory);
+    const partColumns = await findHeaderColumn(workBook, "part number");
+    await fetchValuesFromColumn(workBook, partColumns);
   }
   return 100;
 };
 const findHeaderColumn = async (data, header) => {
   const columns = [];
   for (const sheet of data.SheetNames) {
+    const newEntry = { sheet, cells: [] };
     const sheetData = data.Sheets[sheet];
     const keys = Object.keys(sheetData);
     for (const key of keys) {
       const value = String(sheetData[key].v) || "";
       if (value.toLowerCase() === header.toLowerCase())
-        columns.push(key);
+        newEntry.cells.push(key);
     }
+    columns.push(newEntry);
   }
   return columns;
 };
 const fetchValuesFromColumn = async (data, cells) => {
+  if (!data || !cells)
+    return [];
+  for (const entry of cells) {
+    const sheetData = data.Sheets[entry.sheet];
+    for (const cell of entry.cells) {
+      const column = cell.replace(/\d/g, "").toLowerCase();
+      const row = +cell.replace(/[a-zA-Z]/g, "");
+      for (const _cell of entry.cells) {
+        const _row = +_cell.replace(/[a-zA-Z]/g, "");
+        if (_cell.includes(column) && _cell !== `${column}${row}` && row < _row) {
+          break;
+        }
+      }
+      let highestRow = 0;
+      for (const sheetKey of Object.keys(sheetData)) {
+        const sheetKeyCol = cell.replace(/\d/g, "");
+        const sheetKeyRow = +cell.replace(/[a-zA-Z]/g, "");
+        if (sheetKeyCol.toLowerCase() === column) {
+          highestRow = highestRow < sheetKeyRow ? sheetKeyRow : highestRow;
+        }
+      }
+      console.log(entry.sheet);
+      console.log("highestRow ", highestRow);
+    }
+  }
+  return [];
 };
 const icon = path.join(__dirname, "../../resources/icon.png");
 function createWindow() {

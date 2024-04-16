@@ -16,7 +16,8 @@ export type SetSettingsTemplate = (template: string[]) => Promise<boolean>
 export type FetchFileCount = () => Promise<number>
 export type FetchPartCount = () => Promise<number>
 export type FetchFiles = () => Promise<string[]>
-
+export type ExtractedEntry = {sheet: string, cells: string[]}
+export type ExtractedKeys =  ExtractedEntry[]
 /**
  * rendered types, again, typically used within rendered, but may be found in preload or main
  */

@@ -7,7 +7,9 @@ import {
   SaveSettings,
   FetchFileCount,
   FetchPartCount,
-  FetchFiles
+  FetchFiles,
+  ExtractedKeys,
+  ExtractedEntry
 } from '@shared/types'
 import { dialog } from 'electron'
 import fs, { ensureDir, readJson, readdir, writeJson } from 'fs-extra'
@@ -145,52 +147,100 @@ export const fetchFileCount: FetchFileCount = async () => {
 export const fetchPartCount: FetchPartCount = async () => {
   const workOrders = await fetchFiles()
   const settings = await getSettings()
-  if (!settings?.directory){ return 0}
+  if (!settings?.directory) {
+    return 0
+  }
   for (const order of workOrders) {
     const directory = path.join(settings.directory, order)
-    const data = await readFile(directory)
-    
-    const partColumns = await findHeaderColumn(data, 'part number')
-    const parts = await fetchValuesFromColumn(data, partColumns)
-  
+    const workBook = await readFile(directory)
+
+    const partColumns = await findHeaderColumn(workBook, 'part number')
+    const parts = await fetchValuesFromColumn(workBook, partColumns)
   }
 
   return 100
 }
 
 /**
- * 
+ *
  * Will return an array containing all of the cells where the header was found
- * 
+ *
  * @param directory string - location of file
  * @param header string - value of cells to be used as headers
  * @returns string[] - array of cells
  */
 const findHeaderColumn = async (data: WorkBook, header: string) => {
+  const columns: ExtractedKeys = []
 
-    const columns: string[] = []
+  for (const sheet of data.SheetNames) {
+    const newEntry: ExtractedEntry = { sheet, cells: [] }
 
-    for (const sheet of data.SheetNames) {
-      const sheetData = data.Sheets[sheet]
-      const keys = Object.keys(sheetData)  
-      for (const key of keys) {
-        const value = String(sheetData[key].v) || ''
-        
-        if(value.toLowerCase() === header.toLowerCase()) columns.push(key)
-      }
+    const sheetData = data.Sheets[sheet]
+    const keys = Object.keys(sheetData)
+    for (const key of keys) {
+      const value = String(sheetData[key].v) || ''
+
+      if (value.toLowerCase() === header.toLowerCase()) newEntry.cells.push(key)
     }
+
+    columns.push(newEntry)
+  }
 
   return columns
 }
 
 /**
- * Will take in an array of sheet cells and return an array of values from the columns 
- * 
+ * Will take in an array of sheet cells and return an array of values from the columns
+ *
  * @param directory string - location of file
- * @param cells string[] - array of cells
+ * @param cells {sheet: string, cells: string[]}[] - array of objects containg the sheet and cells for table headers
  * @returns string[] - values of cells
  */
 
-const fetchValuesFromColumn = async (data: WorkBook, cells: string[]) => {
-//to be written
+const fetchValuesFromColumn = async (data: WorkBook, cells: ExtractedKeys) => {
+  if (!data || !cells) return []
+
+  const values: string[] = []
+
+  for (const entry of cells) {
+    const sheetData = data.Sheets[entry.sheet]
+
+    for (const cell of entry.cells) {
+      //Begin extracting the column and rows
+      const column = cell.replace(/\d/g, '').toLowerCase()
+      const row = +cell.replace(/[a-zA-Z]/g, '')
+      let newTable
+
+      // Check if we have multiple tables in the same column
+      for (const _cell of entry.cells) {
+        const _row = +_cell.replace(/[a-zA-Z]/g, '')
+
+        // Check if the main loops row is not greater than this private check.
+        if (_cell.includes(column) && _cell !== `${column}${row}` && row < _row) {
+          newTable = +_row
+          break
+        }
+      }
+
+      /**
+       * Get sheetdata column max row
+       * We may not need to do this? We have hte next table location above?
+       * So we should be able to just iterate through the rows until current >= nextTable, skip row, get next new table repaet
+       */
+      let highestRow = 0
+      for (const sheetKey of Object.keys(sheetData)) {
+        const sheetKeyCol = cell.replace(/\d/g, '')
+        const sheetKeyRow = +cell.replace(/[a-zA-Z]/g, '')
+        if (sheetKeyCol.toLowerCase() === column) {
+          highestRow = highestRow < sheetKeyRow ? sheetKeyRow : highestRow
+        }
+      }
+
+      console.log(entry.sheet)
+      console.log('highestRow ', highestRow)
+      //iterate each row until is == next table.
+    }
+  }
+
+  return []
 }

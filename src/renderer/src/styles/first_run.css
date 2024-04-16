@@ -1,0 +1,26 @@
+.first-run-container {
+  text-align: center;
+  padding: 1.5rem;
+}
+
+.first-run-container h1 {
+  font-size: 3rem;
+}
+
+.first-run-container p {
+  font-size: 1.5rem;
+}
+
+.first-run-container button {
+  margin-top: 1rem;
+  background-color: rgba(150, 150, 150, 0.5);
+  padding: 0.5rem;
+  border-radius: 25px;
+  border: none;
+  transition: scale 0.5s ease-in-out;
+}
+
+.first-run-container button:hover {
+  cursor: pointer;
+  scale: 1.08;
+}

@@ -2,10 +2,22 @@
 const electron = require("electron");
 const fs = require("fs-extra");
 const path = require("path");
-const xlsx = require("xlsx");
+const XLSX = require("xlsx");
 const utils = require("@electron-toolkit/utils");
 const APP_DIRECTORY = electron.app.getPath("userData");
 const SETTINGS_PATH = `${APP_DIRECTORY}/settings.json`;
+const valueIsValid = (value) => {
+  const illegalChars = [" ", "-", ":"];
+  const sani = value.trim().toLowerCase();
+  return !illegalChars.some((char) => sani.includes(char));
+};
+const getTableMaxRow = (sheet) => {
+  const ref = sheet["!ref"];
+  if (!ref)
+    return 0;
+  const maxRow = XLSX.utils.decode_range(ref).e.r + 1;
+  return maxRow;
+};
 const getSettings = async () => {
   try {
     fs.ensureDir(APP_DIRECTORY);
@@ -70,7 +82,9 @@ const fetchFiles = async () => {
       return [];
     const { directory } = settings;
     const files = await fs.readdir(directory);
-    const validFiles = files.filter((file) => !/^\./.test(file) && /\.(xlsx|ods)$/.test(file));
+    const validFiles = files.filter(
+      (file) => !/^(?:\.|~\$)/.test(file) && /\.(xlsx|ods)$/.test(file)
+    );
     return validFiles;
   } catch (error) {
     console.error(`error fetchingFiles: ${error}`);
@@ -92,56 +106,77 @@ const fetchPartCount = async () => {
   if (!settings?.directory) {
     return 0;
   }
-  for (const order of workOrders) {
-    const directory = path.join(settings.directory, order);
-    const workBook = await xlsx.readFile(directory);
-    const partColumns = await findHeaderColumn(workBook, "part number");
-    await fetchValuesFromColumn(workBook, partColumns);
+  let count = [];
+  try {
+    for (const order of workOrders) {
+      const directory = path.join(settings.directory, order);
+      const workBook = await XLSX.readFile(directory);
+      console.log("\x1B[32mprocessing\x1B[0m", order);
+      const header = "part number";
+      const partColumns = await findHeaderColumn(workBook, header);
+      count.push(...await fetchValuesFromColumn(workBook, partColumns, header));
+    }
+    return [...new Set(count)].length;
+  } catch (error) {
+    console.log(error);
+    return 0;
   }
-  return 100;
 };
 const findHeaderColumn = async (data, header) => {
   const columns = [];
-  for (const sheet of data.SheetNames) {
-    const newEntry = { sheet, cells: [] };
-    const sheetData = data.Sheets[sheet];
-    const keys = Object.keys(sheetData);
-    for (const key of keys) {
-      const value = String(sheetData[key].v) || "";
-      if (value.toLowerCase() === header.toLowerCase())
-        newEntry.cells.push(key);
+  try {
+    for (const sheet of data.SheetNames) {
+      const newEntry = { sheet, cells: [], header: "" };
+      const sheetData = data.Sheets[sheet];
+      const keys = Object.keys(sheetData);
+      for (const key of keys) {
+        const value = String(sheetData[key].v) || "";
+        if (value.toLowerCase().includes(header.toLowerCase())) {
+          newEntry.cells.push(key);
+          newEntry.header = value;
+        }
+      }
+      columns.push(newEntry);
     }
-    columns.push(newEntry);
-  }
-  return columns;
-};
-const fetchValuesFromColumn = async (data, cells) => {
-  if (!data || !cells)
+    return columns;
+  } catch (error) {
+    console.error(error);
     return [];
-  for (const entry of cells) {
-    const sheetData = data.Sheets[entry.sheet];
-    for (const cell of entry.cells) {
-      const column = cell.replace(/\d/g, "").toLowerCase();
-      const row = +cell.replace(/[a-zA-Z]/g, "");
-      for (const _cell of entry.cells) {
-        const _row = +_cell.replace(/[a-zA-Z]/g, "");
-        if (_cell.includes(column) && _cell !== `${column}${row}` && row < _row) {
-          break;
+  }
+};
+const fetchValuesFromColumn = async (data, payload, header = "") => {
+  if (!data || !payload)
+    return [];
+  const values = [];
+  for (const { sheet, cells } of payload) {
+    console.log("\x1B[31mprocessing sheet\x1B[0m", sheet);
+    const sheetData = data.Sheets[sheet];
+    const tableStartRows = [...new Set(cells.map((cell) => +cell.replace(/[a-zA-Z]/g, "")))];
+    const tableColumns = [...new Set(cells.map((cell) => cell.replace(/\d/g, "")))];
+    for (const column of tableColumns) {
+      for (const rowIndex in tableStartRows) {
+        let row = tableStartRows[rowIndex];
+        const nextTable = tableStartRows[+rowIndex + 1] || getTableMaxRow(sheetData) + 1;
+        const tableHeader = sheetData[`${column}${row}`];
+        if (!tableHeader)
+          continue;
+        while (row < nextTable - 1) {
+          const index = row + 1;
+          const cellData = sheetData[`${column}${index}`];
+          if (cellData) {
+            const data2 = cellData.v.toLowerCase();
+            if (data2 === "key" || !valueIsValid(data2)) {
+              row++;
+              continue;
+            }
+            values.push(cellData.v.toLowerCase());
+          }
+          row++;
         }
       }
-      let highestRow = 0;
-      for (const sheetKey of Object.keys(sheetData)) {
-        const sheetKeyCol = cell.replace(/\d/g, "");
-        const sheetKeyRow = +cell.replace(/[a-zA-Z]/g, "");
-        if (sheetKeyCol.toLowerCase() === column) {
-          highestRow = highestRow < sheetKeyRow ? sheetKeyRow : highestRow;
-        }
-      }
-      console.log(entry.sheet);
-      console.log("highestRow ", highestRow);
     }
   }
-  return [];
+  return [...new Set(values)];
 };
 const icon = path.join(__dirname, "../../resources/icon.png");
 function createWindow() {

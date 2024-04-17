@@ -12,9 +12,10 @@ import {
   ExtractedEntry
 } from '@shared/types'
 import { dialog } from 'electron'
-import fs, { ensureDir, readJson, readdir, writeJson } from 'fs-extra'
+import fs, { ensureDir, readJson, writeJson } from 'fs-extra'
 import path from 'path'
 import { WorkBook, readFile } from 'xlsx'
+import { valueIsValid, getTableMaxRow } from '../utils'
 
 /**
  * async function returning null or user settings
@@ -117,7 +118,9 @@ export const fetchFiles: FetchFiles = async () => {
     if (!settings?.directory) return []
     const { directory } = settings
     const files = await fs.readdir(directory)
-    const validFiles = files.filter((file) => !/^\./.test(file) && /\.(xlsx|ods)$/.test(file))
+    const validFiles = files.filter(
+      (file) => !/^(?:\.|~\$)/.test(file) && /\.(xlsx|ods)$/.test(file)
+    )
     return validFiles
   } catch (error) {
     console.error(`error fetchingFiles: ${error}`)
@@ -150,15 +153,24 @@ export const fetchPartCount: FetchPartCount = async () => {
   if (!settings?.directory) {
     return 0
   }
-  for (const order of workOrders) {
-    const directory = path.join(settings.directory, order)
-    const workBook = await readFile(directory)
 
-    const partColumns = await findHeaderColumn(workBook, 'part number')
-    const parts = await fetchValuesFromColumn(workBook, partColumns)
+  let count: string[] = []
+  try {
+    for (const order of workOrders) {
+      const directory = path.join(settings.directory, order)
+      const workBook = await readFile(directory)
+      console.log('\x1b[32mprocessing\x1b[0m', order)
+
+      const header = 'part number'
+      const partColumns = await findHeaderColumn(workBook, header)
+      count.push(...(await fetchValuesFromColumn(workBook, partColumns, header)))
+    }
+
+    return [...new Set(count)].length
+  } catch (error) {
+    console.log(error)
+    return 0
   }
-
-  return 100
 }
 
 /**
@@ -171,22 +183,29 @@ export const fetchPartCount: FetchPartCount = async () => {
  */
 const findHeaderColumn = async (data: WorkBook, header: string) => {
   const columns: ExtractedKeys = []
+  try {
+    for (const sheet of data.SheetNames) {
+      const newEntry: ExtractedEntry = { sheet, cells: [], header: '' }
 
-  for (const sheet of data.SheetNames) {
-    const newEntry: ExtractedEntry = { sheet, cells: [] }
+      const sheetData = data.Sheets[sheet]
+      const keys = Object.keys(sheetData)
+      for (const key of keys) {
+        const value = String(sheetData[key].v) || ''
 
-    const sheetData = data.Sheets[sheet]
-    const keys = Object.keys(sheetData)
-    for (const key of keys) {
-      const value = String(sheetData[key].v) || ''
+        if (value.toLowerCase().includes(header.toLowerCase())) {
+          newEntry.cells.push(key)
+          newEntry.header = value
+        }
+      }
 
-      if (value.toLowerCase() === header.toLowerCase()) newEntry.cells.push(key)
+      columns.push(newEntry)
     }
 
-    columns.push(newEntry)
+    return columns
+  } catch (error) {
+    console.error(error)
+    return []
   }
-
-  return columns
 }
 
 /**
@@ -197,50 +216,53 @@ const findHeaderColumn = async (data: WorkBook, header: string) => {
  * @returns string[] - values of cells
  */
 
-const fetchValuesFromColumn = async (data: WorkBook, cells: ExtractedKeys) => {
-  if (!data || !cells) return []
+const fetchValuesFromColumn = async (
+  data: WorkBook,
+  payload: ExtractedKeys,
+  header: string = ''
+) => {
+  if (!data || !payload) return []
 
   const values: string[] = []
 
-  for (const entry of cells) {
-    const sheetData = data.Sheets[entry.sheet]
+  for (const { sheet, cells } of payload) {
+    console.log('\x1b[31mprocessing sheet\x1b[0m', sheet)
+    const sheetData = data.Sheets[sheet]
 
-    for (const cell of entry.cells) {
-      //Begin extracting the column and rows
-      const column = cell.replace(/\d/g, '').toLowerCase()
-      const row = +cell.replace(/[a-zA-Z]/g, '')
-      let newTable
+    // Create a new arrays containing unique rows and numbers
+    const tableStartRows = [...new Set(cells.map((cell) => +cell.replace(/[a-zA-Z]/g, '')))]
+    const tableColumns = [...new Set(cells.map((cell) => cell.replace(/\d/g, '')))]
 
-      // Check if we have multiple tables in the same column
-      for (const _cell of entry.cells) {
-        const _row = +_cell.replace(/[a-zA-Z]/g, '')
+    //Begin iterating over our tables
+    for (const column of tableColumns) {
+      for (const rowIndex in tableStartRows) {
+        let row = tableStartRows[rowIndex]
+        const nextTable = tableStartRows[+rowIndex + 1] || getTableMaxRow(sheetData) + 1
 
-        // Check if the main loops row is not greater than this private check.
-        if (_cell.includes(column) && _cell !== `${column}${row}` && row < _row) {
-          newTable = +_row
-          break
+        const tableHeader = sheetData[`${column}${row}`]
+
+        if (!tableHeader) continue
+
+        //Due to table header being one row below the table details we want to iterate up to the row before the header
+        while (row < nextTable - 1) {
+          const index = row + 1
+          const cellData = sheetData[`${column}${index}`]
+
+          if (cellData) {
+            const data = cellData.v.toLowerCase()
+            //Fount end of sheet
+            if (data === 'key' || !valueIsValid(data)) {
+              row++
+              continue
+            }
+
+            values.push(cellData.v.toLowerCase())
+          }
+          row++
         }
       }
-
-      /**
-       * Get sheetdata column max row
-       * We may not need to do this? We have hte next table location above?
-       * So we should be able to just iterate through the rows until current >= nextTable, skip row, get next new table repaet
-       */
-      let highestRow = 0
-      for (const sheetKey of Object.keys(sheetData)) {
-        const sheetKeyCol = cell.replace(/\d/g, '')
-        const sheetKeyRow = +cell.replace(/[a-zA-Z]/g, '')
-        if (sheetKeyCol.toLowerCase() === column) {
-          highestRow = highestRow < sheetKeyRow ? sheetKeyRow : highestRow
-        }
-      }
-
-      console.log(entry.sheet)
-      console.log('highestRow ', highestRow)
-      //iterate each row until is == next table.
     }
   }
 
-  return []
+  return [...new Set(values)]
 }
